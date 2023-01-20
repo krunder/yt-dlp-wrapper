@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "A simple wrapper for the yt-dlp command line utility.",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
@@ -27,7 +28,9 @@
     "child_process": "^1.0.2",
     "events": "^3.3.0",
     "os": "^0.1.2",
+    "p-queue": "^7.3.0",
     "path": "^0.12.7",
-    "process": "^0.11.10"
+    "process": "^0.11.10",
+    "tree-kill": "^1.2.2"
   }
 }

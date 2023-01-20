@@ -3,11 +3,9 @@
   "display": "Node 18",
 
   "compilerOptions": {
-    "lib": [
-      "es2022",
-      "dom"
-    ],
-    "module": "commonjs",
+    "lib": ["es2020", "dom"],
+    "module": "es2020",
+    "moduleResolution": "node",
     "target": "es2022",
 
     "strict": true,
@@ -19,7 +17,10 @@
     "declaration": true
   },
 
-  "include": ["src/**/*"],
+  "include": [
+    "src/*.ts",
+    "src/**/*.ts"
+  ],
 
   "exclude": [
     "node_modules",
