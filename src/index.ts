@@ -2,7 +2,7 @@ import path from 'path';
 import { cwd } from 'process';
 import { ChildProcessWithoutNullStreams, spawn, exec } from 'child_process';
 import kill from 'tree-kill';
-import { EOL } from 'os';
+import bytes from 'bytes';
 import PQueue from 'p-queue';
 import DownloadEventEmitter, { DownloadProgress } from './events/DownloadEventEmitter.js';
 import { EventEmitter } from './events/EventEmitter.js';
@@ -11,6 +11,171 @@ interface SpawnProcessOptions {
   onError?: (message: string, data?: Buffer) => void
   onOutput?: (data: Buffer, stream: ChildProcessWithoutNullStreams) => void;
   onComplete?: (stream: ChildProcessWithoutNullStreams) => void;
+}
+
+interface YTDLPVersion {
+  version: string;
+  current_git_head: string | null;
+  release_git_head: string | null;
+  repository: string;
+}
+
+interface VideoFormatFragment {
+  url: string;
+  duration: number;
+}
+
+interface HTTPHeaders {
+  [key: string]: string;
+}
+
+interface VideoDownloaderOptions {
+  http_chunk_size?: number;
+}
+
+interface VideoFormat {
+  format_id: string;
+  format_note: string;
+  ext: string;
+  protocol: string;
+  acodec: string;
+  vcodec: string;
+  url: string;
+  width: number;
+  height: number;
+  fps: number;
+  rows: number;
+  columns: number;
+  fragments: VideoFormatFragment[];
+  audio_ext: string;
+  video_ext: string;
+  format: string;
+  resolution: string;
+  aspect_ratio: number;
+  http_headers: HTTPHeaders;
+}
+
+interface VideoRequestedFormat extends VideoFormat {
+  asr: number | null;
+  filesize: number;
+  source_preference: number;
+  audio_channels: number | null;
+  quality: number;
+  has_drm: boolean;
+  tbr: number;
+  language: string | null;
+  language_preference: number;
+  preference: number| null;
+  dynamic_range: string;
+  vbr: number;
+  downloader_options: VideoDownloaderOptions;
+  container: string;
+}
+
+interface VideoThumbnail {
+  url: string;
+  preference: number;
+  id: string;
+}
+
+interface VideoSubtitle {
+  ext: string;
+  url: string;
+  name: string;
+}
+
+interface VideoSubtitles {
+  [key: string]: VideoSubtitle[];
+}
+
+interface VideoChapter {
+  start_time: number;
+  end_time: number;
+  title: string;
+}
+
+interface VideoDetails {
+  id: string;
+  title: string;
+  formats: VideoFormat[];
+  thumbnails: VideoThumbnail[];
+  thumbnail: string;
+  description: string;
+  uploader: string;
+  uploader_id: string;
+  uploader_url: string;
+  channel_id: string;
+  channel_url: string;
+  duration: number;
+  view_count: number;
+  average_rating: number | null;
+  age_limit: number;
+  webpage_url: string;
+  categories: string[];
+  tags: string[];
+  playable_in_embed: boolean;
+  live_status: string;
+  release_timestamp: number | null;
+  _format_sort_fields: string[];
+  automatic_captions: VideoSubtitles,
+  subtitles: VideoSubtitles,
+  comment_count: number;
+  chapters: VideoChapter[];
+  like_count: number;
+  channel: string;
+  channel_follower_count: number;
+  upload_date: string;
+  availability: string;
+  original_url: string;
+  webpage_url_basename: string;
+  webpage_url_domain: string;
+  extractor: string;
+  extractor_key: string;
+  playlist_count: number;
+  playlist: string;
+  playlist_id: string;
+  playlist_title: string;
+  playlist_uploader: string;
+  playlist_uploader_id: string;
+  n_entries: number;
+  playlist_index: number;
+  __last_playlist_index: number;
+  playlist_autonumber: number;
+  display_id: string;
+  fulltitle: string;
+  duration_string: string;
+  is_live: boolean;
+  was_live: boolean;
+  requested_subtitles: VideoSubtitles,
+  _has_drm: boolean | null;
+  requested_formats: VideoRequestedFormat[];
+  format: string;
+  format_id: string;
+  ext: string;
+  protocol: string;
+  language: string | null;
+  format_note: string;
+  filesize_approx: number;
+  tbr: number;
+  width: number;
+  height: number;
+  resolution: string;
+  fps: number;
+  dynamic_range: string;
+  vcodec: string;
+  vbr: number;
+  stretched_ratio: number | null;
+  aspect_ratio: number | null;
+  acodec: string;
+  abr: number;
+  asr: number;
+  audio_channels: number;
+  epoch: number;
+  _filename: string;
+  filename: string;
+  urls: string;
+  _type: string;
+  _version: YTDLPVersion;
 }
 
 const CHUNK_SIZE = 5;
@@ -68,7 +233,7 @@ const download = (url: string): DownloadEventEmitter => {
         autoStart: false,
       });
 
-      for (let i = 1; i <= count; i++) {
+      for (let i = 1; i <= 1; i++) {
         queue.add(async (): Promise<void> => {
           try {
             await downloadChunk(url, i, i);
@@ -139,12 +304,19 @@ const downloadChunk = (url: string, startIndex: number = 1, endIndex: number = 0
         const matches = PROGRESS_REGEX.exec(line.trim());
 
         if (matches) {
-          const event = {
+          const totalSize = matches[2] + matches[3];
+          const totalSizeBytes = bytes(totalSize.replace('i', ''));
+
+          const speed = matches[4] + matches[5];
+
+          const event: DownloadProgress = {
+            currentIndex: endIndex,
             percent: Number(matches[1]),
-            totalSize: Number(matches[2]),
-            totalSizeUnit: matches[3],
-            currentRate: Number(matches[4]),
-            currentRateUnit: matches[5],
+            size: {
+              current: totalSizeBytes * (Number(matches[1]) / 100),
+              total: totalSizeBytes,
+            },
+            speed: bytes(speed.replace('i', '')),
             estimatedTime: matches[6],
           };
 
@@ -156,7 +328,7 @@ const downloadChunk = (url: string, startIndex: number = 1, endIndex: number = 0
     spawnProcess(params, {
       onOutput,
       onComplete: (): void => resolve(),
-      onError: (message: string, data?: Buffer): void => reject(data.toString()),
+      onError: (message: string, data?: Buffer): void => reject(message),
     });
   });
 };
@@ -188,7 +360,7 @@ const getInfoChunk = (url: string, startIndex: number = 1, endIndex: number = 0)
   });
 };
 
-const spawnProcess = (params: any, options: SpawnProcessOptions = {}): ChildProcessWithoutNullStreams => {
+const spawnProcess = (params: string[], options: SpawnProcessOptions = {}): ChildProcessWithoutNullStreams => {
   const process = spawn(executablePath, [...defaultParams, ...params]);
 
   const { onError, onOutput, onComplete } = options;

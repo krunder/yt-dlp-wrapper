@@ -1,17 +1,16 @@
 import { EventEmitter } from './EventEmitter.js';
 
 export interface DownloadProgress {
+  currentIndex: number;
+
   percent: number;
 
   size: {
+    current: number;
     total: number;
-
-    totalUnit: string;
-  },
+  }
 
   speed: number;
-
-  speedUnit: string;
 
   estimatedTime: string;
 }
