@@ -8,7 +8,12 @@
     "build": "tsc",
     "dev": "tsc -w",
     "lint": "eslint -c .eslintrc.json src/**/*",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run lint",
+    "preversion": "npm run lint",
+    "version": "git add -A src && git commit -m \"chore(release): v${npm_package_version}\"",
+    "postversion": "git push && git push --tags"
   },
   "repository": {
     "type": "git",
@@ -40,5 +45,17 @@
     "process": "^0.11.10",
     "tree-kill": "^1.2.2"
   },
+  "keywords": [
+    "yt-dlp",
+    "youtube",
+    "youtube-downloader",
+    "downloader",
+    "youtube-dl",
+    "youtube-dlc",
+    "youtube-dlp",
+    "youtube-dl-wrapper",
+    "youtube-dlc-wrapper",
+    "youtube-dlp-wrapper"
+  ],
   "files": ["dist/**/*"]
 }
