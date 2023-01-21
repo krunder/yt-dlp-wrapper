@@ -17,7 +17,8 @@ export interface DownloadProgress {
 
 type DownloadEvents = {
   progress: (progress: DownloadProgress) => void;
-}
+  error: (error: Error) => void;
+};
 
 class DownloadEventEmitter extends EventEmitter<DownloadEvents> {
 }
