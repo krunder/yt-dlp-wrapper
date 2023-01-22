@@ -93,7 +93,7 @@ interface VideoChapter {
   title: string;
 }
 
-interface VideoDetails {
+export interface VideoDetails {
   id: string;
   title: string;
   formats: VideoFormat[];
@@ -276,35 +276,35 @@ const downloadChunk = (
     url,
   ];
 
-  return new Promise((resolve, reject): void => {
-    const onOutput = (data: Buffer): void => {
-      const lines: string[] = data.toString().split(/(?:\r\n|\r|\n)/g);
+  const onOutput = (data: Buffer): void => {
+    const lines: string[] = data.toString().split(/(?:\r\n|\r|\n)/g);
 
-      for (let i = 0; i < lines.length; i += 1) {
-        const matches = PROGRESS_REGEX.exec(lines[i].trim());
+    for (let i = 0; i < lines.length; i += 1) {
+      const matches = PROGRESS_REGEX.exec(lines[i].trim());
 
-        if (matches) {
-          const totalSize = matches[2] + matches[3];
-          const totalSizeBytes = bytes(totalSize.replace('i', ''));
+      if (matches) {
+        const totalSize = matches[2] + matches[3];
+        const totalSizeBytes = bytes(totalSize.replace('i', ''));
 
-          const speed = matches[4] + matches[5];
+        const speed = matches[4] + matches[5];
 
-          const event: DownloadProgress = {
-            currentIndex: endIndex,
-            percent: Number(matches[1]),
-            size: {
-              current: totalSizeBytes * (Number(matches[1]) / 100),
-              total: totalSizeBytes,
-            },
-            speed: bytes(speed.replace('i', '')),
-            estimatedTime: matches[6],
-          };
+        const event: DownloadProgress = {
+          currentIndex: endIndex,
+          percent: Number(matches[1]),
+          size: {
+            current: totalSizeBytes * (Number(matches[1]) / 100),
+            total: totalSizeBytes,
+          },
+          speed: bytes(speed.replace('i', '')),
+          estimatedTime: matches[6],
+        };
 
-          emitter.emit('progress', event);
-        }
+        emitter.emit('progress', event);
       }
-    };
+    }
+  };
 
+  return new Promise((resolve, reject): void => {
     spawnProcess(params, {
       onOutput,
       onComplete: (): void => resolve(),
@@ -330,12 +330,12 @@ const getDetailsChunk = (
     url,
   ];
 
-  return new Promise((resolve, reject): void => {
-    const onOutput = (data: Buffer): void => {
-      const json = JSON.parse(data.toString().trim());
-      info.push(json);
-    };
+  const onOutput = (data: Buffer): void => {
+    const json = JSON.parse(data.toString().trim());
+    info.push(json);
+  };
 
+  return new Promise((resolve, reject): void => {
     spawnProcess(params, {
       onOutput,
       onComplete: (): void => resolve(info),
@@ -344,7 +344,7 @@ const getDetailsChunk = (
   });
 };
 
-const download = (url: string): DownloadEventEmitter => {
+export const download = (url: string): DownloadEventEmitter => {
   const emitter = new DownloadEventEmitter();
 
   getVideoCount(url)
@@ -366,7 +366,9 @@ const download = (url: string): DownloadEventEmitter => {
 
       queue.start();
 
-      queue.on('idle', (): void => {});
+      queue.on('idle', (): void => {
+        emitter.emit('complete');
+      });
     })
     .catch((err: Error): void => { emitter.emit('error', err); });
 
@@ -374,11 +376,11 @@ const download = (url: string): DownloadEventEmitter => {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const getDetails = (url: string): Promise<any> => {
+export const getDetails = (url: string): Promise<any> => {
   let details: VideoDetails[] = [];
 
   return getVideoCount(url)
-    .then((count: number): Promise<any> => {
+    .then((count: number): Promise<VideoDetails[]> => {
       const queue = new PQueue({
         concurrency: 5,
         autoStart: false,
@@ -391,15 +393,16 @@ const getDetails = (url: string): Promise<any> => {
         const endIndex = (i + 1) * CHUNK_SIZE;
 
         queue.add(async (): Promise<void> => {
-          const infoChunk = await getDetailsChunk(url, startIndex, endIndex);
-          details = [...details, ...infoChunk];
+          const chunk = await getDetailsChunk(url, startIndex, endIndex);
+          details = [...details, ...chunk];
         });
       }
 
       queue.start();
 
-      return new Promise((resolve): void => {
+      return new Promise((resolve, reject): void => {
         queue.on('idle', (): void => resolve(details));
+        queue.on('error', (err: Error): void => reject(err));
       });
     });
 };
