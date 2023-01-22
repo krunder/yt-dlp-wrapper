@@ -193,72 +193,6 @@ const defaultParams = [
   '--embed-metadata',
 ];
 
-const executablePath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-
-const spawnProcess = (
-  params: string[],
-  options: SpawnProcessOptions = {},
-): ChildProcessWithoutNullStreams => {
-  const process = spawn(executablePath, [...defaultParams, ...params]);
-
-  const { onError, onOutput, onComplete } = options;
-
-  process.stdout.on('data', (data: Buffer): void => {
-    if (typeof onOutput === 'function') {
-      onOutput(data, process);
-    }
-  });
-
-  process.stderr.on('data', (data: Buffer): void => {
-    process.stdin.end();
-
-    if (typeof onError === 'function') {
-      onError('Process failed due to unknown error.', data);
-    }
-  });
-
-  process.on('exit', (code: number): void => {
-    process.stdin.end();
-
-    // TODO: Investigate alternatives to having exit code 1 returned when kill() is used
-    if ([0, 1].indexOf(code) !== -1) {
-      if (typeof onComplete === 'function') {
-        onComplete(process);
-      }
-    } else if (typeof onError === 'function') {
-      onError(`Process exited with code ${code}.`);
-    }
-  });
-
-  return process;
-};
-
-const getVideoCount = (url: string): Promise<number> => {
-  const params = [
-    '--simulate',
-    '-O',
-    '%(playlist_count)s',
-    url,
-  ];
-
-  let count = 0;
-
-  return new Promise((resolve, reject): void => {
-    const onOutput = (data: Buffer, process: ChildProcessWithoutNullStreams): void => {
-      count = Number(data.toString().trim()) || 1;
-
-      if (process.pid) {
-        kill(process.pid, 'SIGINT');
-      }
-    };
-
-    const onError = (message: string): void => reject(message);
-    const onComplete = (): void => resolve(count);
-
-    spawnProcess(params, { onOutput, onError, onComplete });
-  });
-};
-
 const downloadChunk = (
   url: string,
   emitter: DownloadEventEmitter,
@@ -411,3 +345,88 @@ export const getDetails = (url: string): Promise<any> => {
 // https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6 - 8 items
 // https://www.youtube.com/watch?v=6NVCkSZf91c - 1 item
 download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+
+class YTDLP {
+  private baseParams: string[] = [
+    '-f',
+    'bv[height<=1080]+ba',
+    '--merge-output-format',
+    'mp4',
+    '--embed-subs',
+    '--embed-thumbnail',
+    '--embed-chapters',
+    '--embed-metadata',
+  ];
+
+  private executablePath: string = '';
+
+  constructor(executablePath: string = '') {
+    this.executablePath = executablePath || path.join(process.cwd(), 'bin', 'yt-dlp.exe');
+  }
+
+  getTotalVideos(url: string): Promise<number> {
+    const params = [
+      '--simulate',
+      '-O',
+      '%(playlist_count)s',
+      url,
+    ];
+
+    let count = 0;
+
+    return new Promise((resolve, reject): void => {
+      const onOutput = (data: Buffer, process: ChildProcessWithoutNullStreams): void => {
+        count = Number(data.toString().trim()) || 1;
+
+        if (process.pid) {
+          kill(process.pid, 'SIGINT');
+        }
+      };
+
+      const onError = (message: string): void => reject(message);
+      const onComplete = (): void => resolve(count);
+
+      this.exec(params, { onOutput, onError, onComplete });
+    });
+  }
+
+  exec(
+    params: string[],
+    options: SpawnProcessOptions = {},
+  ): ChildProcessWithoutNullStreams {
+    const process = spawn(this.executablePath, [...this.baseParams, ...params]);
+
+    const { onError, onOutput, onComplete } = options;
+
+    process.stdout.on('data', (data: Buffer): void => {
+      if (typeof onOutput === 'function') {
+        onOutput(data, process);
+      }
+    });
+
+    process.stderr.on('data', (data: Buffer): void => {
+      process.stdin.end();
+
+      if (typeof onError === 'function') {
+        onError('Process failed due to unknown error.', data);
+      }
+    });
+
+    process.on('exit', (code: number): void => {
+      process.stdin.end();
+
+      // TODO: Investigate alternatives to having exit code 1 returned when kill() is used
+      if ([0, 1].indexOf(code) !== -1) {
+        if (typeof onComplete === 'function') {
+          onComplete(process);
+        }
+      } else if (typeof onError === 'function') {
+        onError(`Process exited with code ${code}.`);
+      }
+    });
+
+    return process;
+  }
+}
+
+export default YTDLP;
