@@ -2,23 +2,12 @@ import { EventEmitter as BaseEventEmitter } from 'events';
 
 type Events = Record<string | symbol, (...args: any) => void>;
 
-type EventsWithProgress<P> = {
+export type EventsWithProgress<P, C extends any[] = [void]> = {
   progress: (progress: P) => void;
   error: (error: Error | string) => void;
-  complete: () => void;
+  complete: (...args: C) => void;
 };
-type EventsWithoutProgress = Omit<EventsWithProgress<void>, 'progress'>;
-
-export interface DownloadProgress {
-  currentIndex: number;
-  percent: number;
-  size: {
-    current: number;
-    total: number;
-  };
-  speed: number;
-  estimatedTime: string;
-}
+export type EventsWithoutProgress<C extends any[] = [void]> = Omit<EventsWithProgress<void, C>, 'progress'>;
 
 export declare interface YTDLPEventEmitter<E extends Events> {
   on<U extends keyof E>(event: U, listener: E[U]): this;
@@ -26,8 +15,6 @@ export declare interface YTDLPEventEmitter<E extends Events> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export class YTDLPEventEmitter<E> extends BaseEventEmitter {
-}
+export class YTDLPEventEmitter<E extends Events> extends BaseEventEmitter {}
 
-export type DownloadEventEmitter = YTDLPEventEmitter<EventsWithProgress<DownloadProgress>>;
-export type TotalVideosEventEmitter = YTDLPEventEmitter<EventsWithoutProgress>;
+export default YTDLPEventEmitter;

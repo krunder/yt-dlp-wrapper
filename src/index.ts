@@ -5,8 +5,9 @@ import kill from 'tree-kill';
 import bytes from 'bytes';
 import PQueue from 'p-queue';
 import DownloadEventEmitter, { DownloadProgress } from './events/DownloadEventEmitter.js';
+import VideoCountEventEmitter from './events/VideoCountEventEmitter';
 
-interface SpawnProcessOptions {
+interface ExecOptions {
   onError?: (message: string, data?: Buffer) => void
   onOutput?: (data: Buffer, stream: ChildProcessWithoutNullStreams) => void;
   onComplete?: (stream: ChildProcessWithoutNullStreams) => void;
@@ -177,12 +178,12 @@ export interface VideoDetails {
   _version: YTDLPVersion;
 }
 
-const CHUNK_SIZE = 5;
+// const CHUNK_SIZE = 5;
 
 const PROGRESS_REGEX = /^\[download\]\s*([0-9]+\.?[0-9]*)%\s*of\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\s*at\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\/s\s*ETA\s*([0-9]+:?[0-9]*)$/;
 // const ALREADY_DOWNLOADED_REGEX = /^\[download\]\s*(.+)\s*has\s*already\s*been\s*downloaded\s*$/
 
-const defaultParams = [
+/* const defaultParams = [
   '-f',
   'bv[height<=1080]+ba',
   '--merge-output-format',
@@ -191,63 +192,9 @@ const defaultParams = [
   '--embed-thumbnail',
   '--embed-chapters',
   '--embed-metadata',
-];
+]; */
 
-const downloadChunk = (
-  url: string,
-  emitter: DownloadEventEmitter,
-  startIndex: number = 1,
-  endIndex: number = 0,
-): Promise<void> => {
-  const params = [
-    ...defaultParams,
-    '--playlist-start',
-    startIndex.toString(),
-    '--playlist-end',
-    (endIndex > 0 ? endIndex.toString() : 'last'),
-    '-o',
-    path.join(cwd(), 'tmp', '%(title)s.%(ext)s'),
-    url,
-  ];
-
-  const onOutput = (data: Buffer): void => {
-    const lines: string[] = data.toString().split(/(?:\r\n|\r|\n)/g);
-
-    for (let i = 0; i < lines.length; i += 1) {
-      const matches = PROGRESS_REGEX.exec(lines[i].trim());
-
-      if (matches) {
-        const totalSize = matches[2] + matches[3];
-        const totalSizeBytes = bytes(totalSize.replace('i', ''));
-
-        const speed = matches[4] + matches[5];
-
-        const event: DownloadProgress = {
-          currentIndex: endIndex,
-          percent: Number(matches[1]),
-          size: {
-            current: totalSizeBytes * (Number(matches[1]) / 100),
-            total: totalSizeBytes,
-          },
-          speed: bytes(speed.replace('i', '')),
-          estimatedTime: matches[6],
-        };
-
-        emitter.emit('progress', event);
-      }
-    }
-  };
-
-  return new Promise((resolve, reject): void => {
-    spawnProcess(params, {
-      onOutput,
-      onComplete: (): void => resolve(),
-      onError: (message: string): void => reject(message),
-    });
-  });
-};
-
-const getDetailsChunk = (
+/* const getDetailsChunk = (
   url: string,
   startIndex: number = 1,
   endIndex: number = 0,
@@ -276,41 +223,10 @@ const getDetailsChunk = (
       onError: (message: string): void => reject(message),
     });
   });
-};
-
-export const download = (url: string): DownloadEventEmitter => {
-  const emitter = new DownloadEventEmitter();
-
-  getVideoCount(url)
-    .then((count: number): void => {
-      const queue = new PQueue({
-        concurrency: 1,
-        autoStart: false,
-      });
-
-      for (let i = 1; i <= count; i += 1) {
-        queue.add(async (): Promise<void> => {
-          try {
-            await downloadChunk(url, emitter, i, i);
-          } catch (err: any) {
-            emitter.emit('error', err);
-          }
-        });
-      }
-
-      queue.start();
-
-      queue.on('idle', (): void => {
-        emitter.emit('complete');
-      });
-    })
-    .catch((err: Error): void => { emitter.emit('error', err); });
-
-  return emitter;
-};
+}; */
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const getDetails = (url: string): Promise<any> => {
+/* export const getDetails = (url: string): Promise<any> => {
   let details: VideoDetails[] = [];
 
   return getVideoCount(url)
@@ -339,12 +255,12 @@ export const getDetails = (url: string): Promise<any> => {
         queue.on('error', (err: Error): void => reject(err));
       });
     });
-};
+}; */
 
 // https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb - 101 items
 // https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6 - 8 items
 // https://www.youtube.com/watch?v=6NVCkSZf91c - 1 item
-download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+// download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
 
 class YTDLP {
   private baseParams: string[] = [
@@ -361,10 +277,15 @@ class YTDLP {
   private executablePath: string = '';
 
   constructor(executablePath: string = '') {
+    // TODO: Make cross-platform using OS dependant file extension.
     this.executablePath = executablePath || path.join(process.cwd(), 'bin', 'yt-dlp.exe');
   }
 
-  getTotalVideos(url: string): Promise<number> {
+  public setExecutablePath(executablePath: string): void {
+    this.executablePath = executablePath;
+  }
+
+  public getVideoCount(url: string): VideoCountEventEmitter {
     const params = [
       '--simulate',
       '-O',
@@ -372,27 +293,77 @@ class YTDLP {
       url,
     ];
 
-    let count = 0;
+    const emitter = new VideoCountEventEmitter();
+
+    const onOutput = (data: Buffer, process: ChildProcessWithoutNullStreams): void => {
+      const count = Number(data.toString().trim()) || 1;
+
+      if (process.pid) {
+        kill(process.pid, 'SIGINT');
+
+        emitter.emit('complete', count);
+      }
+    };
+
+    const onError = (message: string): void => { emitter.emit('error', message); };
+
+    this.exec(params, { onOutput, onError });
+
+    return emitter;
+  }
+
+  public getVideoCountSync(url: string): Promise<number> {
+    const emitter = this.getVideoCount(url);
 
     return new Promise((resolve, reject): void => {
-      const onOutput = (data: Buffer, process: ChildProcessWithoutNullStreams): void => {
-        count = Number(data.toString().trim()) || 1;
-
-        if (process.pid) {
-          kill(process.pid, 'SIGINT');
-        }
-      };
-
-      const onError = (message: string): void => reject(message);
-      const onComplete = (): void => resolve(count);
-
-      this.exec(params, { onOutput, onError, onComplete });
+      emitter.on('complete', (count: number): void => resolve(count));
+      emitter.on('error', (err: Error | string): void => reject(err));
     });
   }
 
-  exec(
+  public download(url: string): DownloadEventEmitter {
+    const emitter = new DownloadEventEmitter();
+
+    this.getVideoCountSync(url)
+      .then((count: number): void => {
+        const queue = new PQueue({
+          concurrency: 1,
+          autoStart: false,
+        });
+
+        for (let i = 1; i <= count; i += 1) {
+          queue.add(async (): Promise<void> => {
+            await this.runDownloadTask(url, (progress: DownloadProgress): void => {
+              emitter.emit('progress', progress);
+            }, i, i);
+          });
+        }
+
+        queue.start();
+
+        queue.on('idle', (): void => {
+          emitter.emit('complete');
+        });
+      })
+      .catch((err: Error): void => {
+        emitter.emit('error', err);
+      });
+
+    return emitter;
+  }
+
+  public downloadSync(url: string): Promise<void> {
+    const emitter = this.download(url);
+
+    return new Promise((resolve, reject): void => {
+      emitter.on('complete', (): void => resolve());
+      emitter.on('error', (err: Error | string): void => reject(err));
+    });
+  }
+
+  public exec(
     params: string[],
-    options: SpawnProcessOptions = {},
+    options: ExecOptions = {},
   ): ChildProcessWithoutNullStreams {
     const process = spawn(this.executablePath, [...this.baseParams, ...params]);
 
@@ -426,6 +397,61 @@ class YTDLP {
     });
 
     return process;
+  }
+
+  private runDownloadTask(
+    url: string,
+    onProgress: (progress: DownloadProgress) => void,
+    startIndex: number = 1,
+    endIndex: number = 0,
+  ): Promise<void> {
+    const params = [
+      ...this.baseParams,
+      '--playlist-start',
+      startIndex.toString(),
+      '--playlist-end',
+      (endIndex > 0 ? endIndex.toString() : 'last'),
+      '-o',
+      path.join(cwd(), 'tmp', '%(title)s.%(ext)s'),
+      url,
+    ];
+
+    const onOutput = (data: Buffer): void => {
+      const lines: string[] = data.toString().split(/(?:\r\n|\r|\n)/g);
+
+      for (let i = 0; i < lines.length; i += 1) {
+        const matches = PROGRESS_REGEX.exec(lines[i].trim());
+
+        if (matches) {
+          const totalSize = matches[2] + matches[3];
+          const totalSizeBytes = bytes(totalSize.replace('i', ''));
+
+          const speed = matches[4] + matches[5];
+
+          const progress: DownloadProgress = {
+            startIndex,
+            endIndex,
+            percent: Number(matches[1]),
+            size: {
+              current: totalSizeBytes * (Number(matches[1]) / 100),
+              total: totalSizeBytes,
+            },
+            speed: bytes(speed.replace('i', '')),
+            estimatedTime: matches[6],
+          };
+
+          onProgress(progress);
+        }
+      }
+    };
+
+    return new Promise((resolve, reject): void => {
+      this.exec(params, {
+        onOutput,
+        onComplete: (): void => resolve(),
+        onError: (message: string): void => reject(message),
+      });
+    });
   }
 }
 
