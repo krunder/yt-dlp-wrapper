@@ -4,8 +4,9 @@ import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import kill from 'tree-kill';
 import bytes from 'bytes';
 import PQueue from 'p-queue';
+import DetailsEventEmitter from './events/DetailsEventEmitter.js';
 import DownloadEventEmitter, { DownloadProgress } from './events/DownloadEventEmitter.js';
-import VideoCountEventEmitter from './events/VideoCountEventEmitter';
+import VideoCountEventEmitter from './events/VideoCountEventEmitter.js';
 
 interface ExecOptions {
   onError?: (message: string, data?: Buffer) => void
@@ -178,89 +179,10 @@ export interface VideoDetails {
   _version: YTDLPVersion;
 }
 
-// const CHUNK_SIZE = 5;
-
 const PROGRESS_REGEX = /^\[download\]\s*([0-9]+\.?[0-9]*)%\s*of\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\s*at\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\/s\s*ETA\s*([0-9]+:?[0-9]*)$/;
 // const ALREADY_DOWNLOADED_REGEX = /^\[download\]\s*(.+)\s*has\s*already\s*been\s*downloaded\s*$/
 
-/* const defaultParams = [
-  '-f',
-  'bv[height<=1080]+ba',
-  '--merge-output-format',
-  'mp4',
-  '--embed-subs',
-  '--embed-thumbnail',
-  '--embed-chapters',
-  '--embed-metadata',
-]; */
-
-/* const getDetailsChunk = (
-  url: string,
-  startIndex: number = 1,
-  endIndex: number = 0,
-): Promise<VideoDetails[]> => {
-  const info: any[] = [];
-
-  const params = [
-    '--simulate',
-    '--dump-json',
-    '--playlist-start',
-    startIndex.toString(),
-    '--playlist-end',
-    (endIndex > 0 ? endIndex.toString() : 'last'),
-    url,
-  ];
-
-  const onOutput = (data: Buffer): void => {
-    const json = JSON.parse(data.toString().trim());
-    info.push(json);
-  };
-
-  return new Promise((resolve, reject): void => {
-    spawnProcess(params, {
-      onOutput,
-      onComplete: (): void => resolve(info),
-      onError: (message: string): void => reject(message),
-    });
-  });
-}; */
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-/* export const getDetails = (url: string): Promise<any> => {
-  let details: VideoDetails[] = [];
-
-  return getVideoCount(url)
-    .then((count: number): Promise<VideoDetails[]> => {
-      const queue = new PQueue({
-        concurrency: 5,
-        autoStart: false,
-      });
-
-      const maxTasks = count / CHUNK_SIZE;
-
-      for (let i = 0; i < maxTasks; i += 1) {
-        const startIndex = (i * CHUNK_SIZE) + 1;
-        const endIndex = (i + 1) * CHUNK_SIZE;
-
-        queue.add(async (): Promise<void> => {
-          const chunk = await getDetailsChunk(url, startIndex, endIndex);
-          details = [...details, ...chunk];
-        });
-      }
-
-      queue.start();
-
-      return new Promise((resolve, reject): void => {
-        queue.on('idle', (): void => resolve(details));
-        queue.on('error', (err: Error): void => reject(err));
-      });
-    });
-}; */
-
-// https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb - 101 items
-// https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6 - 8 items
-// https://www.youtube.com/watch?v=6NVCkSZf91c - 1 item
-// download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+const CHUNK_SIZE = 5;
 
 class YTDLP {
   private baseParams: string[] = [
@@ -361,6 +283,56 @@ class YTDLP {
     });
   }
 
+  public getDetails(url: string): DetailsEventEmitter {
+    const emitter = new DetailsEventEmitter();
+
+    let details: VideoDetails[] = [];
+
+    this.getVideoCountSync(url)
+      .then((count: number): void => {
+        const queue = new PQueue({
+          concurrency: 5,
+          autoStart: false,
+        });
+
+        const maxTasks = count / CHUNK_SIZE;
+
+        for (let i = 0; i < maxTasks; i += 1) {
+          const startIndex = (i * CHUNK_SIZE) + 1;
+          const endIndex = (i + 1) * CHUNK_SIZE;
+
+          queue.add(async (): Promise<void> => {
+            const chunk = await this.runDetailsTask(url, startIndex, endIndex);
+            details = [...details, ...chunk];
+          });
+        }
+
+        queue.start();
+
+        queue.on('idle', (): void => {
+          emitter.emit('complete', details);
+        });
+
+        queue.on('error', (err: Error): void => {
+          emitter.emit('error', err);
+        });
+      })
+      .catch((err: Error): void => {
+        emitter.emit('error', err);
+      });
+
+    return emitter;
+  }
+
+  public getDetailsSync(url: string): Promise<VideoDetails[]> {
+    const emitter = this.getDetails(url);
+
+    return new Promise((resolve, reject): void => {
+      emitter.on('complete', (details: VideoDetails[]): void => resolve(details));
+      emitter.on('error', (err: Error | string): void => reject(err));
+    });
+  }
+
   public exec(
     params: string[],
     options: ExecOptions = {},
@@ -406,7 +378,6 @@ class YTDLP {
     endIndex: number = 0,
   ): Promise<void> {
     const params = [
-      ...this.baseParams,
       '--playlist-start',
       startIndex.toString(),
       '--playlist-end',
@@ -453,6 +424,48 @@ class YTDLP {
       });
     });
   }
+
+  private runDetailsTask(
+    url: string,
+    startIndex: number = 1,
+    endIndex: number = 0,
+  ): Promise<VideoDetails[]> {
+    const details: VideoDetails[] = [];
+
+    const params = [
+      '--simulate',
+      '--dump-json',
+      '--playlist-start',
+      startIndex.toString(),
+      '--playlist-end',
+      (endIndex > 0 ? endIndex.toString() : 'last'),
+      url,
+    ];
+
+    const onOutput = (data: Buffer): void => {
+      const json = JSON.parse(data.toString().trim());
+      details.push(json);
+    };
+
+    return new Promise((resolve, reject): void => {
+      this.exec(params, {
+        onOutput,
+        onComplete: (): void => resolve(details),
+        onError: (message: string): void => reject(message),
+      });
+    });
+  }
 }
+
+// https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb - 101 items
+// https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6 - 8 items
+// https://www.youtube.com/watch?v=6NVCkSZf91c - 1 item
+const instance = new YTDLP();
+const emitter = instance.getDetails('https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6');
+
+// emitter.on('complete', (count: number): void => { console.log(count); });
+emitter.on('complete', (details: VideoDetails[]): void => { console.log(details); });
+
+// download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
 
 export default YTDLP;
