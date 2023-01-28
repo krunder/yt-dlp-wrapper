@@ -1,13 +1,14 @@
 import path from 'path';
 import { cwd } from 'process';
-import { ChildProcessWithoutNullStreams, spawn, exec } from 'child_process';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import kill from 'tree-kill';
 import bytes from 'bytes';
 import PQueue from 'p-queue';
-import DownloadEventEmitter, { DownloadProgress } from './events/DownloadEventEmitter.js';
-import { EventEmitter } from './events/EventEmitter.js';
+import DetailsEventEmitter from './events/DetailsEventEmitter.js';
+import VideoDownloadEventEmitter, { DownloadProgress } from './events/VideoDownloadEventEmitter';
+import VideoCountEventEmitter from './events/VideoCountEventEmitter.js';
 
-interface SpawnProcessOptions {
+interface ExecOptions {
   onError?: (message: string, data?: Buffer) => void
   onOutput?: (data: Buffer, stream: ChildProcessWithoutNullStreams) => void;
   onComplete?: (stream: ChildProcessWithoutNullStreams) => void;
@@ -65,7 +66,7 @@ interface VideoRequestedFormat extends VideoFormat {
   tbr: number;
   language: string | null;
   language_preference: number;
-  preference: number| null;
+  preference: number | null;
   dynamic_range: string;
   vbr: number;
   downloader_options: VideoDownloaderOptions;
@@ -94,7 +95,7 @@ interface VideoChapter {
   title: string;
 }
 
-interface VideoDetails {
+export interface VideoDetails {
   id: string;
   title: string;
   formats: VideoFormat[];
@@ -178,130 +179,219 @@ interface VideoDetails {
   _version: YTDLPVersion;
 }
 
+const PROGRESS_REGEX = /^\[download\]\s*([0-9]+\.?[0-9]*)%\s*of\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\s*at\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\/s\s*ETA\s*([0-9]+:?[0-9]*)$/;
+// const ALREADY_DOWNLOADED_REGEX = /^\[download\]\s*(.+)\s*has\s*already\s*been\s*downloaded\s*$/
+
 const CHUNK_SIZE = 5;
 
-const PROGRESS_REGEX = /^\[download\]\s*([0-9]+\.?[0-9]*)%\s*of\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\s*at\s*([0-9]+\.?[0-9]*)([a-zA-Z]+)\/s\s*ETA\s*([0-9]+:?[0-9]*)$/;
-const ALREADY_DOWNLOADED_REGEX = /^\[download\]\s*(.+)\s*has\s*already\s*been\s*downloaded\s*$/
-
-const defaultParams = [
-  '-f',
-  'bv[height<=1080]+ba',
-  '--merge-output-format',
-  'mp4',
-  '--embed-subs',
-  '--embed-thumbnail',
-  '--embed-chapters',
-  '--embed-metadata',
-];
-
-const executablePath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-
-const getVideoCount = (url: string): Promise<number> => {
-  const params = [
-    '--simulate',
-    '-O',
-    `%(playlist_count)s`,
-    url,
+class YTDLP {
+  private baseParams: string[] = [
+    '-f',
+    'bv[height<=1080]+ba',
+    '--merge-output-format',
+    'mp4',
+    '--embed-subs',
+    '--embed-thumbnail',
+    '--embed-chapters',
+    '--embed-metadata',
   ];
 
-  let count = 0;
+  private executablePath: string = '';
 
-  return new Promise((resolve, reject): void => {
+  constructor(executablePath: string = '') {
+    // TODO: Make cross-platform using OS dependant file extension.
+    this.executablePath = executablePath || path.join(process.cwd(), 'bin', 'yt-dlp.exe');
+  }
+
+  public setExecutablePath(executablePath: string): void {
+    this.executablePath = executablePath;
+  }
+
+  public getVideoCount(url: string): VideoCountEventEmitter {
+    const params = [
+      '--simulate',
+      '-O',
+      '%(playlist_count)s',
+      url,
+    ];
+
+    const emitter = new VideoCountEventEmitter();
+
     const onOutput = (data: Buffer, process: ChildProcessWithoutNullStreams): void => {
-      count = Number(data.toString().trim()) || 1;
+      const count = Number(data.toString().trim()) || 1;
 
       if (process.pid) {
         kill(process.pid, 'SIGINT');
+
+        emitter.emit('complete', count);
       }
     };
 
-    const onError = (message: string): void => reject(message);
-    const onComplete = (): void => resolve(count);
+    const onError = (message: string): void => { emitter.emit('error', message); };
 
-    spawnProcess(params, { onOutput, onError, onComplete });
-  });
-};
+    this.exec(params, { onOutput, onError });
 
-const download = (url: string): DownloadEventEmitter => {
-  const emitter = new DownloadEventEmitter();
+    return emitter;
+  }
 
-  // TODO: Remove requirement of loading the video count before downloading
-  getVideoCount(url)
-    .then((count: number): void => {
-      const queue = new PQueue({
-        concurrency: 1,
-        autoStart: false,
-      });
+  public getVideoCountSync(url: string): Promise<number> {
+    const emitter = this.getVideoCount(url);
 
-      for (let i = 1; i <= 1; i++) {
-        queue.add(async (): Promise<void> => {
-          try {
-            await downloadChunk(url, i, i);
-          } catch (err: any) {
-            console.error(err);
-            throw new Error(err);
-          }
-        });
-      }
-
-      queue.start();
-
-      queue.on('idle', (): void => {});
-    })
-    .catch((err: any): void => { console.log(err); });
-
-  return emitter;
-};
-
-const getInfo = (url: string): Promise<any> => {
-  // TODO: Remove requirement of loading the video count before retrieving info
-  return getVideoCount(url)
-    .then((count: number): Promise<any> => {
-      let info: any[] = [];
-
-      const queue = new PQueue({
-        concurrency: 5,
-        autoStart: false,
-      });
-
-      const maxTasks = count / CHUNK_SIZE;
-
-      for (let i = 0; i < maxTasks; i++) {
-        const startIndex = (i * CHUNK_SIZE) + 1;
-        const endIndex = (i + 1) * CHUNK_SIZE;
-
-        queue.add(async (): Promise<void> => {
-          const infoChunk = await getInfoChunk(url, startIndex, endIndex);
-          info = [...info, ...infoChunk];
-        });
-      }
-
-      queue.start();
-
-      return new Promise((resolve, reject): void => {
-        queue.on('idle', (): void => resolve(info));
-      });
+    return new Promise((resolve, reject): void => {
+      emitter.on('complete', (count: number): void => resolve(count));
+      emitter.on('error', (err: Error | string): void => reject(err));
     });
-};
+  }
 
-const downloadChunk = (url: string, startIndex: number = 1, endIndex: number = 0): Promise<void> => {
-  const params = [
-    ...defaultParams,
-    '--playlist-start',
-    startIndex.toString(),
-    '--playlist-end',
-    (endIndex > 0 ? endIndex.toString() : 'last'),
-    '-o',
-    path.join(cwd(), 'tmp', '%(title)s.%(ext)s'),
-    url,
-  ];
+  public downloadVideos(url: string): VideoDownloadEventEmitter {
+    const emitter = new VideoDownloadEventEmitter();
 
-  return new Promise((resolve, reject): void => {
+    this.getVideoCountSync(url)
+      .then((count: number): void => {
+        const queue = new PQueue({
+          concurrency: 1,
+          autoStart: false,
+        });
+
+        for (let i = 1; i <= count; i += 1) {
+          queue.add(async (): Promise<void> => {
+            await this.runDownloadTask(url, (progress: DownloadProgress): void => {
+              emitter.emit('progress', progress);
+            }, i, i);
+          });
+        }
+
+        queue.start();
+
+        queue.on('idle', (): void => {
+          emitter.emit('complete');
+        });
+      })
+      .catch((err: Error): void => {
+        emitter.emit('error', err);
+      });
+
+    return emitter;
+  }
+
+  public downloadVideosSync(url: string): Promise<void> {
+    const emitter = this.downloadVideos(url);
+
+    return new Promise((resolve, reject): void => {
+      emitter.on('complete', (): void => resolve());
+      emitter.on('error', (err: Error | string): void => reject(err));
+    });
+  }
+
+  public getDetails(url: string): DetailsEventEmitter {
+    const emitter = new DetailsEventEmitter();
+
+    let details: VideoDetails[] = [];
+
+    this.getVideoCountSync(url)
+      .then((count: number): void => {
+        const queue = new PQueue({
+          concurrency: 5,
+          autoStart: false,
+        });
+
+        const maxTasks = count / CHUNK_SIZE;
+
+        for (let i = 0; i < maxTasks; i += 1) {
+          const startIndex = (i * CHUNK_SIZE) + 1;
+          const endIndex = (i + 1) * CHUNK_SIZE;
+
+          queue.add(async (): Promise<void> => {
+            const chunk = await this.runDetailsTask(url, startIndex, endIndex);
+            details = [...details, ...chunk];
+          });
+        }
+
+        queue.start();
+
+        queue.on('idle', (): void => {
+          emitter.emit('complete', details);
+        });
+
+        queue.on('error', (err: Error): void => {
+          emitter.emit('error', err);
+        });
+      })
+      .catch((err: Error): void => {
+        emitter.emit('error', err);
+      });
+
+    return emitter;
+  }
+
+  public getDetailsSync(url: string): Promise<VideoDetails[]> {
+    const emitter = this.getDetails(url);
+
+    return new Promise((resolve, reject): void => {
+      emitter.on('complete', (details: VideoDetails[]): void => resolve(details));
+      emitter.on('error', (err: Error | string): void => reject(err));
+    });
+  }
+
+  public exec(
+    params: string[],
+    options: ExecOptions = {},
+  ): ChildProcessWithoutNullStreams {
+    const process = spawn(this.executablePath, [...this.baseParams, ...params]);
+
+    const { onError, onOutput, onComplete } = options;
+
+    process.stdout.on('data', (data: Buffer): void => {
+      if (typeof onOutput === 'function') {
+        onOutput(data, process);
+      }
+    });
+
+    process.stderr.on('data', (data: Buffer): void => {
+      process.stdin.end();
+
+      if (typeof onError === 'function') {
+        onError('Process failed due to unknown error.', data);
+      }
+    });
+
+    process.on('exit', (code: number): void => {
+      process.stdin.end();
+
+      // TODO: Investigate alternatives to having exit code 1 returned when kill() is used
+      if ([0, 1].indexOf(code) !== -1) {
+        if (typeof onComplete === 'function') {
+          onComplete(process);
+        }
+      } else if (typeof onError === 'function') {
+        onError(`Process exited with code ${code}.`);
+      }
+    });
+
+    return process;
+  }
+
+  private runDownloadTask(
+    url: string,
+    onProgress: (progress: DownloadProgress) => void,
+    startIndex: number = 1,
+    endIndex: number = 0,
+  ): Promise<void> {
+    const params = [
+      '--playlist-start',
+      startIndex.toString(),
+      '--playlist-end',
+      (endIndex > 0 ? endIndex.toString() : 'last'),
+      '-o',
+      path.join(cwd(), 'tmp', '%(title)s.%(ext)s'),
+      url,
+    ];
+
     const onOutput = (data: Buffer): void => {
       const lines: string[] = data.toString().split(/(?:\r\n|\r|\n)/g);
 
-      for (let line of lines) {
-        const matches = PROGRESS_REGEX.exec(line.trim());
+      for (let i = 0; i < lines.length; i += 1) {
+        const matches = PROGRESS_REGEX.exec(lines[i].trim());
 
         if (matches) {
           const totalSize = matches[2] + matches[3];
@@ -309,8 +399,9 @@ const downloadChunk = (url: string, startIndex: number = 1, endIndex: number = 0
 
           const speed = matches[4] + matches[5];
 
-          const event: DownloadProgress = {
-            currentIndex: endIndex,
+          const progress: DownloadProgress = {
+            startIndex,
+            endIndex,
             percent: Number(matches[1]),
             size: {
               current: totalSizeBytes * (Number(matches[1]) / 100),
@@ -320,90 +411,61 @@ const downloadChunk = (url: string, startIndex: number = 1, endIndex: number = 0
             estimatedTime: matches[6],
           };
 
-          console.log(event);
+          onProgress(progress);
         }
       }
     };
 
-    spawnProcess(params, {
-      onOutput,
-      onComplete: (): void => resolve(),
-      onError: (message: string, data?: Buffer): void => reject(message),
+    return new Promise((resolve, reject): void => {
+      this.exec(params, {
+        onOutput,
+        onComplete: (): void => resolve(),
+        onError: (message: string): void => reject(message),
+      });
     });
-  });
-};
+  }
 
-const getInfoChunk = (url: string, startIndex: number = 1, endIndex: number = 0): Promise<any[]> => {
-  const info: any[] = [];
+  private runDetailsTask(
+    url: string,
+    startIndex: number = 1,
+    endIndex: number = 0,
+  ): Promise<VideoDetails[]> {
+    const details: VideoDetails[] = [];
 
-  const params = [
-    '--simulate',
-    '--dump-json',
-    '--playlist-start',
-    startIndex.toString(),
-    '--playlist-end',
-    (endIndex > 0 ? endIndex.toString() : 'last'),
-    url,
-  ];
+    const params = [
+      '--simulate',
+      '--dump-json',
+      '--playlist-start',
+      startIndex.toString(),
+      '--playlist-end',
+      (endIndex > 0 ? endIndex.toString() : 'last'),
+      url,
+    ];
 
-  return new Promise((resolve, reject): void => {
     const onOutput = (data: Buffer): void => {
       const json = JSON.parse(data.toString().trim());
-      info.push(json);
+      details.push(json);
     };
 
-    spawnProcess(params, {
-      onOutput,
-      onComplete: (): void => resolve(info),
-      onError: (message: string, data?: Buffer): void => reject(message),
+    return new Promise((resolve, reject): void => {
+      this.exec(params, {
+        onOutput,
+        onComplete: (): void => resolve(details),
+        onError: (message: string): void => reject(message),
+      });
     });
-  });
-};
-
-const spawnProcess = (params: string[], options: SpawnProcessOptions = {}): ChildProcessWithoutNullStreams => {
-  const process = spawn(executablePath, [...defaultParams, ...params]);
-
-  const { onError, onOutput, onComplete } = options;
-
-  process.stdout.on('data', (data: Buffer): void => {
-    if (typeof onOutput === 'function') {
-      onOutput(data, process);
-    }
-  });
-
-  process.stderr.on('data', (data: Buffer): void => {
-    process.stdin.end();
-
-    if (typeof onError === 'function') {
-      onError('Process failed due to unknown error.', data);
-    }
-  });
-
-  process.on('exit', (code: number): void => {
-    process.stdin.end();
-
-    // TODO: Investigate alternatives to having exit code 1 returned when kill() is used
-    if ([0, 1].indexOf(code) !== -1) {
-      if (typeof onComplete === 'function') {
-        onComplete(process);
-      }
-    } else {
-      if (typeof onError === 'function') {
-        onError(`Process exited with code ${code}.`);
-      }
-    }
-  });
-
-  return process;
-};
+  }
+}
 
 // https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb - 101 items
 // https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6 - 8 items
 // https://www.youtube.com/watch?v=6NVCkSZf91c - 1 item
-download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+const instance = new YTDLP();
+const emitter = instance.getDetails('https://www.youtube.com/playlist?list=PLrLBbJnregxdViIXPShNRphM2DPNYn5o6');
 
-//const stream = download('https://www.youtube.com/watch?v=6NVCkSZf91c');
+// emitter.on('complete', (count: number): void => { console.log(count); });
+emitter.on('complete', (details: VideoDetails[]): void => { console.log(details); });
 
-/*stream.on('progress', (progress: DownloadProgress): void => {
-  console.log(progress);
-});*/
+// downloadVideos('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+
+export default YTDLP;

@@ -7,7 +7,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "eslint -c .eslintrc.json src/**/*",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run lint"
   },
   "repository": {
     "type": "git",
@@ -23,6 +26,10 @@
     "@types/bytes": "^3.1.1",
     "@types/events": "^3.0.0",
     "@types/node": "^18.11.18",
+    "@typescript-eslint/eslint-plugin": "^5.48.2",
+    "@typescript-eslint/parser": "^5.48.2",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-config-airbnb-typescript": "^17.0.0",
     "typescript": "^4.9.4"
   },
   "dependencies": {
@@ -34,5 +41,18 @@
     "path": "^0.12.7",
     "process": "^0.11.10",
     "tree-kill": "^1.2.2"
-  }
+  },
+  "keywords": [
+    "yt-dlp",
+    "youtube",
+    "youtube-downloader",
+    "downloader",
+    "youtube-dl",
+    "youtube-dlc",
+    "youtube-dlp",
+    "youtube-dl-wrapper",
+    "youtube-dlc-wrapper",
+    "youtube-dlp-wrapper"
+  ],
+  "files": ["dist/**/*"]
 }
