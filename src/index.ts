@@ -5,7 +5,7 @@ import kill from 'tree-kill';
 import bytes from 'bytes';
 import PQueue from 'p-queue';
 import DetailsEventEmitter from './events/DetailsEventEmitter.js';
-import DownloadEventEmitter, { DownloadProgress } from './events/DownloadEventEmitter.js';
+import VideoDownloadEventEmitter, { DownloadProgress } from './events/VideoDownloadEventEmitter';
 import VideoCountEventEmitter from './events/VideoCountEventEmitter.js';
 
 interface ExecOptions {
@@ -243,8 +243,8 @@ class YTDLP {
     });
   }
 
-  public download(url: string): DownloadEventEmitter {
-    const emitter = new DownloadEventEmitter();
+  public downloadVideos(url: string): VideoDownloadEventEmitter {
+    const emitter = new VideoDownloadEventEmitter();
 
     this.getVideoCountSync(url)
       .then((count: number): void => {
@@ -274,8 +274,8 @@ class YTDLP {
     return emitter;
   }
 
-  public downloadSync(url: string): Promise<void> {
-    const emitter = this.download(url);
+  public downloadVideosSync(url: string): Promise<void> {
+    const emitter = this.downloadVideos(url);
 
     return new Promise((resolve, reject): void => {
       emitter.on('complete', (): void => resolve());
@@ -466,6 +466,6 @@ const emitter = instance.getDetails('https://www.youtube.com/playlist?list=PLrLB
 // emitter.on('complete', (count: number): void => { console.log(count); });
 emitter.on('complete', (details: VideoDetails[]): void => { console.log(details); });
 
-// download('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
+// downloadVideos('https://www.youtube.com/playlist?list=PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb');
 
 export default YTDLP;

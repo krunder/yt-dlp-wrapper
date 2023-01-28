@@ -12,6 +12,6 @@ export interface DownloadProgress {
   estimatedTime: string;
 }
 
-class DownloadEventEmitter extends YTDLPEventEmitter<EventsWithProgress<DownloadProgress>> {}
+class VideoDownloadEventEmitter extends YTDLPEventEmitter<EventsWithProgress<DownloadProgress>> {}
 
-export default DownloadEventEmitter;
+export default VideoDownloadEventEmitter;
